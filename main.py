@@ -1,78 +1,65 @@
-import requests
 import os
-from datetime import datetime, timedelta
+import asyncio
+from playwright.async_api import async_playwright
+import requests
 
 # --- 설정 ---
 TARGET_PRICE = 50000
-DEPARTURE_AIRPORT = "TAE"
-ARRIVAL_AIRPORT = "CJU"
-# 검색 날짜: 내일로부터 7일 후 (날짜가 너무 멀면 표가 없을 수 있음)
+DEPARTURE = "TAE"
+ARRIVAL = "CJU"
+# 오늘로부터 7일 후 날짜 계산
+from datetime import datetime, timedelta
 target_date = (datetime.now() + timedelta(days=1)).strftime('%Y%m%d')
 
-def check_flights():
-    # URL을 직접 조립하지 않고 params로 넘겨서 인코딩 문제를 방지합니다.
-    url = "https://m-flight.naver.com/api/flights/itinerary/list"
-    
-    params = {
-        "adult": "1",
-        "isDirect": "true",
-        "fareType": "Y",
-        "itinerary": f'[{{"departureAirportId":"{DEPARTURE_AIRPORT}","arrivalAirportId":"{ARRIVAL_AIRPORT}","departureDate":"{target_date}"}}]',
-        "galileoFlag": "true"
-    }
+async def check_flights():
+    async with async_playwright() as p:
+        # 브라우저 실행 (실제 사람처럼 보이기 위해 헤드리스 모드 사용)
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+        )
+        page = await context.new_page()
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/04.1",
-        "Referer": "https://m-flight.naver.com/flights/itinerary/TAE-CJU-20240520?adult=1&isDirect=true&fareType=Y",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
-    }
-
-    try:
-        response = requests.get(url, params=params, headers=headers)
+        # 네이버 항공권 검색 결과 페이지로 바로 이동
+        url = f"https://m-flight.naver.com/flights/itinerary/{DEPARTURE}-{ARRIVAL}-{target_date}?adult=1&isDirect=true&fareType=Y"
+        print(f"접속 중: {url}")
         
-        # 상태 코드 확인 (200이 아니면 차단된 것)
-        print(f"응답 상태 코드: {response.status_code}")
+        await page.goto(url, wait_until="networkidle")
         
-        if response.status_code != 200:
-            print("네이버에서 요청을 차단했습니다. 헤더나 IP를 확인해야 합니다.")
+        # 항공권 정보가 로딩될 때까지 잠시 대기 (최대 10초)
+        try:
+            await page.wait_for_selector(".domestic_Flight__3uV_j", timeout=15000)
+        except:
+            print("항공권 정보를 찾는 데 실패했습니다. (로딩 지연 또는 결과 없음)")
+            await browser.close()
             return
 
-        data = response.json()
+        # 모든 가격 요소 추출
+        prices = await page.query_selector_all(".domestic_num__2roTW")
         
-        # 항공권 목록 확인
-        flights = data.get('result', {}).get('flights', [])
-        
-        if not flights:
-            print(f"{target_date}에 해당하는 항공권 정보가 없습니다.")
-            return
+        fare_list = []
+        for price_el in prices:
+            text = await price_el.inner_text()
+            # '12,500' 형태의 문자열을 숫자로 변환
+            num = int(text.replace(",", ""))
+            fare_list.append(num)
 
-        # 가격 추출 및 최저가 계산
-        prices = [f['fare']['adt'] for f in flights if 'fare' in f]
-        if not prices:
-            print("가격 정보가 포함된 항공권이 없습니다.")
-            return
-            
-        min_fare = min(prices)
-        print(f"검색 날짜: {target_date}, 현재 최저가: {min_fare}원")
-
-        if min_fare <= TARGET_PRICE:
-            send_telegram(f"✈️ 레이커스 항공 특가!\n날짜: {target_date}\n최저가: {min_fare}원\n확인: https://m-flight.naver.com/")
+        if not fare_list:
+            print("가격 데이터를 가져오지 못했습니다.")
         else:
-            print(f"알림 기준({TARGET_PRICE}원)보다 비쌉니다. (현재 {min_fare}원)")
-
-    except Exception as e:
-        print(f"에러 상세 내용: {e}")
+            min_fare = min(fare_list)
+            print(f"최저가 발견: {min_fare}원")
+            
+            if min_fare <= TARGET_PRICE:
+                send_telegram(f"✈️ [레이커스 항공] 대구-제주 특가!\n날짜: {target_date}\n최저가: {min_fare}원\n확인: {url}")
+        
+        await browser.close()
 
 def send_telegram(message):
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        print("텔레그램 토큰 또는 ID가 설정되지 않았습니다.")
-        return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    params = {"chat_id": chat_id, "text": message}
-    requests.get(url, params=params)
+    requests.get(url, params={"chat_id": chat_id, "text": message})
 
 if __name__ == "__main__":
-    check_flights()
+    asyncio.run(check_flights())
