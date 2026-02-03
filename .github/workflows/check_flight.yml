@@ -1,9 +1,9 @@
-name: TAECJU-Flight-Alert
+name: NBA-Flight-Alert
 
 on:
   schedule:
-    - cron: '0 * * * *' # 매시간 정각 실행 (UTC 기준)
-  workflow_dispatch: # 수동 실행 버튼 추가
+    - cron: '0 * * * *'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -19,7 +19,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests
+          pip install requests playwright
+          playwright install chromium
 
       - name: Run Script
         env:
