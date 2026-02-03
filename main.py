@@ -4,7 +4,7 @@ from playwright.async_api import async_playwright
 import requests
 
 # --- 설정 ---
-TARGET_PRICE = 50000
+TARGET_PRICE = 100000
 DEPARTURE = "TAE"
 ARRIVAL = "CJU"
 # 오늘로부터 7일 후 날짜 계산
