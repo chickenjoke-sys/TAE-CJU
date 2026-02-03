@@ -2,64 +2,61 @@ import os
 import asyncio
 from playwright.async_api import async_playwright
 import requests
-
-# --- 설정 ---
-TARGET_PRICE = 100000
-DEPARTURE = "TAE"
-ARRIVAL = "CJU"
-# 오늘로부터 7일 후 날짜 계산
 from datetime import datetime, timedelta
-target_date = (datetime.now() + timedelta(days=1)).strftime('%Y%m%d')
+
+TARGET_PRICE = 50000
+# 내일 날짜 (YYYY-MM-DD 형식, 구글은 이 형식을 선호합니다)
+target_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
 
 async def check_flights():
     async with async_playwright() as p:
-        # 브라우저 실행 (실제 사람처럼 보이기 위해 헤드리스 모드 사용)
         browser = await p.chromium.launch(headless=True)
+        # 한국어 설정을 추가하여 한국어 결과를 유도합니다.
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+            locale="ko-KR"
         )
         page = await context.new_page()
 
-        # 네이버 항공권 검색 결과 페이지로 바로 이동
-        url = f"https://m-flight.naver.com/flights/itinerary/{DEPARTURE}-{ARRIVAL}-{target_date}?adult=1&isDirect=true&fareType=Y"
-        print(f"접속 중: {url}")
+        # 구글에서 직접 검색 (네이버 차단을 피하기 위함)
+        search_url = f"https://www.google.com/search?q=대구+제주+항공권+{target_date}"
+        print(f"구글 검색 접속 중: {search_url}")
         
-        await page.goto(url, wait_until="networkidle")
-        
-        # 항공권 정보가 로딩될 때까지 잠시 대기 (최대 10초)
-        try:
-            await page.wait_for_selector(".domestic_Flight__3uV_j", timeout=15000)
-        except:
-            print("항공권 정보를 찾는 데 실패했습니다. (로딩 지연 또는 결과 없음)")
-            await browser.close()
-            return
+        await page.goto(search_url, wait_until="networkidle")
+        await page.wait_for_timeout(5000) # 결과 로딩 대기
 
-        # 모든 가격 요소 추출
-        prices = await page.query_selector_all(".domestic_num__2roTW")
+        # 구글 항공권 모듈에서 가격 텍스트 추출 (가격을 나타내는 일반적인 선택자 시도)
+        # 구글은 클래스명이 유동적이므로 '원'이라는 글자를 포함한 요소를 찾습니다.
+        price_elements = await page.query_selector_all("span:has-text('원')")
         
         fare_list = []
-        for price_el in prices:
-            text = await price_el.inner_text()
-            # '12,500' 형태의 문자열을 숫자로 변환
-            num = int(text.replace(",", ""))
-            fare_list.append(num)
+        for el in price_elements:
+            text = await el.inner_text()
+            try:
+                # '35,000원' -> 35000 변환
+                clean_text = ''.join(filter(str.isdigit, text))
+                if clean_text:
+                    fare_list.append(int(clean_text))
+            except:
+                continue
 
         if not fare_list:
-            print("가격 데이터를 가져오지 못했습니다.")
+            print("항공권 가격을 찾지 못했습니다. 다른 우회 방법을 고려해야 합니다.")
         else:
-            min_fare = min(fare_list)
-            print(f"최저가 발견: {min_fare}원")
+            min_fare = min([f for f in fare_list if f > 10000]) # 너무 낮은 가격(에러) 제외
+            print(f"[{target_date}] 최저가 발견: {min_fare}원")
             
             if min_fare <= TARGET_PRICE:
-                send_telegram(f"✈️ [레이커스 항공] 대구-제주 특가!\n날짜: {target_date}\n최저가: {min_fare}원\n확인: {url}")
-        
+                send_telegram(f"✈️ [특가 알림] 대구-제주\n날짜: {target_date}\n최저가: {min_fare}원\n검색결과: {search_url}")
+
         await browser.close()
 
 def send_telegram(message):
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    requests.get(url, params={"chat_id": chat_id, "text": message})
+    if token and chat_id:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        requests.get(url, params={"chat_id": chat_id, "text": message})
 
 if __name__ == "__main__":
     asyncio.run(check_flights())
