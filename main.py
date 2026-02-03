@@ -4,7 +4,7 @@ from playwright.async_api import async_playwright
 import requests
 from datetime import datetime, timedelta
 
-TARGET_PRICE = 50000
+TARGET_PRICE = 70000
 # 내일 날짜 (YYYY-MM-DD 형식, 구글은 이 형식을 선호합니다)
 target_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
 
